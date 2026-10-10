@@ -86,11 +86,10 @@ SENTENCE_CONNECTORS = {
     "similarly":      ["Likewise,", "Much the same way,"],
     "conversely":     ["On the flip side,", "But", "Look at it the other way and"],
     "notably":        ["Strikingly,", "Tellingly,", "Worth noting:"],
-    "indeed":         ["In fact,", "Actually,", "Truth is,"],
+    "indeed":         ["In fact,", "Actually,"],
     "thus":           ["So", "That means", "Which means"],
     "hence":          ["So", "That's why", "Which is why"],
     "overall":        ["All told,", "On balance,", "In the end,"],
-    "ultimately":     ["In the end,", "When it matters,", "Bottom line:"],
     "in addition":    ["Also,", "On top of that,", "Plus,"],
     "in particular":  ["Especially", "Particularly"],
     "in general":     ["Generally", "By and large,"],
@@ -664,8 +663,8 @@ SYN_TABLE.update({
     "field": ["arena", "turf", "domain"],
     "fields": ["arenas", "turfs", "domains"],
     "domain": ["turf", "arena", "sandbox"],
-    "sector": ["corner of the economy", "bracket", "wing"],
-    "sectors": ["corners of the economy", "brackets", "wings"],
+    "sector": ["bracket", "field", "line of work"],
+    "sectors": ["brackets", "fields", "lines of work"],
     "topic": ["subject", "thread", "matter"],
     "topics": ["subjects", "threads", "matters"],
     "subject": ["matter", "thread", "topic"],
@@ -950,7 +949,6 @@ SYN_TABLE.update({
     "nevertheless": ["even so", "still"],
     "nonetheless": ["even so"],
     "accordingly": ["so"],
-    "ultimately": ["in the end", "when it matters"],
     "underscore": ["stress"],
     "underscores": ["stresses"],
     "underscoring": ["stressing"],
@@ -1835,7 +1833,7 @@ _CONTRACTIONS = [
 
 _HEDGES = ["probably", "I think", "more or less", "to be fair",
            "in my experience", "if I'm honest", "for the most part",
-           "roughly speaking", "as a rule", "on balance"]
+           "roughly speaking", "as a rule"]
 
 def _inject_texture(sents, rng, profile, strength):
     p = {
@@ -1850,7 +1848,7 @@ def _inject_texture(sents, rng, profile, strength):
     max_q = 1 if n_words > 250 else 0
     hedges, dashes, qs = 0, 0, 0
     used_opens = []
-    opener_pool = ["Look,", "Now,", "Here's the thing:", "That said,", "Truth is,",
+    opener_pool = ["Look,", "Now,", "Here's the thing:", "That said,",
                    "In practice,", "Either way,", "And here's the kicker:",
                    "The catch?", "Put simply,"]
     out = []
@@ -2371,6 +2369,111 @@ def _grammar_repair(out_text, orig_text, rng):
         return _join_clean(orig_text), n_rev, n_chk
     return '\n\n'.join(out_paras), n_rev, n_chk
 
+
+
+# v2.3: AI filler phrases and poetic abstractions found in live testing.
+# Both are stripped/replaced on sight -- whether they came in from the source
+# text or (formerly) from our own substitute tables.
+_FILLER_PHRASES = [
+    "truth is", "on balance", "in truth", "in fairness", "all told",
+    "in sum", "in essence", "by and large", "when all is said and done",
+    "at the end of the day", "needless to say", "without a doubt",
+    "for what it's worth", "make no mistake", "the fact of the matter is",
+]
+# poetic abstractions the detector flags as ungrounded; mapped to concrete terms
+# where a safe generic swap exists, else stripped of the flourish.
+_POETIC_ABSTRACT = {
+    "archive of light": "record",
+    "tangle of wires": "network",
+    "river of data": "data stream",
+    "web of connections": "network",
+    "sea of information": "dataset",
+    "tapestry of ideas": "mix of ideas",
+    "lattice of light": "grid",
+    "dawn of a new era": "turning point",
+    "symphony of": "blend of",
+    "dance of": "pattern of",
+    "ocean of": "large set of",
+    "mountain of": "large set of",
+    "fabric of": "structure of",
+    "canvas of": "space of",
+    "corner of the economy": "part of the economy",
+    "corners of the economy": "parts of the economy",
+    "invisible hand": "market pressure",
+    "beacon of hope": "sign of progress",
+    "shining example": "clear example",
+    "captured the imagination": "attracted attention",
+    "the human condition": "how people live",
+    "the fabric of society": "how society works",
+    "the pulse of the city": "city life",
+    "the heartbeat of": "the core of",
+}
+
+def _strip_fillers(text):
+    """Remove filler connectives and poetic abstractions; clean punctuation."""
+    for ph, rep in _POETIC_ABSTRACT.items():
+        text = re.sub(r'\b' + re.escape(ph) + r'\b', rep, text, flags=re.I)
+    for filler in sorted(_FILLER_PHRASES, key=len, reverse=True):
+        e = re.escape(filler)
+        # sentence-initial connective: "Truth is, ..." / "On balance, ..."
+        text = re.sub(r'(^|(?<=[.!?]\s))' + e + r',?\s*', '', text, flags=re.I)
+        # mid-sentence paired connective: ", truth is," / ", on balance"
+        text = re.sub(r',\s*' + e + r',?', '', text, flags=re.I)
+        # trailing connective before clause: "on balance the economy..." handled
+        # by the sentence-initial rule only at sentence starts; mid-clause use
+        # without commas is rare enough to leave (removing it risks grammar).
+    # normalize artifacts
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    text = re.sub(r'\s+([,;.!?])', r'\1', text)
+    text = re.sub(r'^[ \t]*,[ \t]*', '', text, flags=re.M)
+    def _cap(m):
+        pre, ch = m.group(1), m.group(2)
+        if ch == 'I' or (pre == '\n'):
+            return pre + (ch.upper() if pre == '\n' else ch)
+        return pre + ch.upper()
+    text = re.sub(r'(^|(?<=[.!?]\s)|\n)([a-z])', lambda m: m.group(1) + m.group(2).upper(), text)
+    text = re.sub(r',\s*,', ',', text)
+    return text
+
+def _vary_structure(text, rng):
+    """Break formulaic cadence, grammar-preserving:
+    (a) drop the lead comma-adverbial when 3+ consecutive sentences open with one;
+    (b) compress a moral-lesson closer to its claim."""
+    paras = re.split(r'(\n\s*\n)', text)
+    res = []
+    for chunk in paras:
+        if not chunk.strip() or re.match(r'^\s*\n\s*\n$', chunk) or '\x00CB' in chunk:
+            res.append(chunk); continue
+        sents = re.split(r'(?<=[.!?])\s+', chunk.strip())
+        if len(sents) >= 3:
+            out = list(sents)
+            lead_pat = re.compile(r'^(?!I )[A-Z][a-z]+( [a-z]+)?,(?=\s)')
+            ok_heads = {'the','a','an','this','that','these','those','it','there','and','but'}
+            runs = 0
+            for i in range(len(out)):
+                m = lead_pat.match(out[i])
+                if m and m.group(0).rstrip(',').lower() not in ok_heads:
+                    runs += 1
+                else:
+                    runs = 0; continue
+                if runs >= 3:
+                    out[i] = out[i][len(m.group(0)):].strip()
+                    if out[i]:
+                        out[i] = out[i][0].lower() + out[i][1:]
+                    runs = 0
+            chunk = ' '.join(out)
+        # moral-lesson closer: compress to its claim (any paragraph length)
+        s2 = re.split(r'(?<=[.!?])\s+', chunk.strip())
+        mm = re.match(r'^(?:[Aa]nd so,?\s*|[Ii]n the end,?\s*|[Uu]ltimately,?\s*|[Ff]inally,?\s*)?(?:this|these stories?) (?:teaches|reminds|shows) (?:us|that)\b(.*)$', s2[-1], re.S) if s2 else None
+        if mm:
+            claim = mm.group(1).strip().rstrip('.').strip()
+            claim = re.sub(r'^that\s+', '', claim, flags=re.I)
+            if claim:
+                s2[-1] = 'The takeaway: ' + (claim[0].lower() + claim[1:]) + '.'
+                chunk = ' '.join(s2)
+        res.append(chunk)
+    return ''.join(res)
+
 def humanize(text, seed=None, strength=0.85, profile='balanced', tries=8):
     """Return the best of N independent runs, ranked by the honest metric.
     Deterministic: same seed -> same output."""
@@ -2406,6 +2509,8 @@ def humanize(text, seed=None, strength=0.85, profile='balanced', tries=8):
         out = _kill_3grams(out, rng)
         out = _gates(out, rng)
         out, n_rev, n_chk = _grammar_repair(out, text, rng)
+        out = _strip_fillers(out)
+        out = _vary_structure(out, rng)
         m = analyze(out)
         m['grammar_reverts'] = n_rev
         m['grammar_checked'] = n_chk
@@ -2422,6 +2527,8 @@ def humanize(text, seed=None, strength=0.85, profile='balanced', tries=8):
             out = _kill_3grams(out, rng)
             out = _gates(out, rng)
             out, n_rev, n_chk = _grammar_repair(out, text, rng)
+            out = _strip_fillers(out)
+            out = _vary_structure(out, rng)
             m = analyze(out)
             m['grammar_reverts'] = n_rev
             m['grammar_checked'] = n_chk
@@ -2464,4 +2571,3 @@ def _sanitize_substitutes():
             del SYN_TABLE[_k]           # all options flagged: flip nothing rather than poison output
 
 _sanitize_substitutes()
-
